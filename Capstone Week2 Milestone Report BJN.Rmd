@@ -1,0 +1,354 @@
+---
+title: "Capstone Week2 Milestone Report"
+author: "Betsy Nash"
+date: "May 13, 2018"
+output:
+  pdf_document: default
+  html_document:
+    pandoc_args:
+    - +RTS
+    - -K64m
+    - -RTS
+keep_md: yes
+---
+
+```{r setup, include=FALSE}
+##hide warnings and messages when loading library(package)
+knitr::opts_chunk$set(echo = TRUE,warning=FALSE,message = FALSE,cache=TRUE)
+```
+
+###Synopsis 
+Big picture: SwiftKey is the partner in this capstone. The goal of the project is to develop a predictive model that eases typing on mobile devices. When a user enters a word, the model returns the three options for the next word.  
+
+The overall goal of this milestone report is to demonstrate familiarity of the Swiftkey dataset (3 sources), some exploratory analysis from a text mining perspective, and discuss next steps.  
+
+##Loaded Libraries
+```{r libraries, echo=TRUE}
+library(knitr)
+library(dplyr)
+library(tm)
+library(SnowballC)
+library(ggplot2)
+library(wordcloud)
+library(RColorBrewer)
+library(Rgraphviz)
+library(stringi)
+library(stringr)
+```
+
+##Data - Overall  
+
+Three data files containing lines of text were provided: news, blogs, and twitter. In total, over 4 Million lines of text were provided. Note this analysis is based on files in the English language.  
+
+```{r models, echo=TRUE}
+#news
+newstest<-readLines(con<-file("C:/Users/Betsy/Downloads/Coursera-SwiftKey/final/en_US/en_US.news.txt", open="rb", encoding="UTF-8"))
+close(con)
+#blogs
+blogstest<-readLines(con<-file("C:/Users/Betsy/Downloads/Coursera-SwiftKey/final/en_US/en_US.blogs.txt", open="rb", encoding="UTF-8"))
+close(con)
+#twitter
+twtest<-readLines(con<-file("C:/Users/Betsy/Downloads/Coursera-SwiftKey/final/en_US/en_US.twitter.txt", open="rb", encoding="UTF-8"))
+close(con)
+```
+
+Data Summary    
+
+```{r SummaryData, echo=FALSE}
+LNews<-length(newstest)
+LBlog<-length(blogstest)
+LTwitter<-length(twtest)
+NewsMb <- file.info("C:/Users/Betsy/Downloads/Coursera-SwiftKey/final/en_US/en_US.news.txt")$size/1024^2
+BlogsMb <- file.info("C:/Users/Betsy/Downloads/Coursera-SwiftKey/final/en_US/en_US.blogs.txt")$size/1024^2
+TwitterMb <- file.info("C:/Users/Betsy/Downloads/Coursera-SwiftKey/final/en_US/en_US.twitter.txt")$size/1024^2
+News_numWordsPerLine <- stri_count_words(newstest)
+Blogs_numWordsPerLine <- stri_count_words(blogstest)
+Tw_numWordsPerLine <- stri_count_words(twtest)
+```
+
+``` {r Summary, echo=TRUE}
+knitr::kable(data.frame(
+        files = c("News","Blog","Twitter"),
+        Size_Mb = c(NewsMb,BlogsMb,TwitterMb),
+        Words = c(News_numWordsPerLine,Blogs_numWordsPerLine,Tw_numWordsPerLine),
+        Lines = c(LNews,LBlog,LTwitter)))
+```
+
+##Data - Sample  
+
+Over 4 millions lines of text is a large dataset. Consistent with inference principles on a population, a dataset was created using the rbinom random sampling technique.  This site was used to determine the needed sample size using confidence interval measures with margins of error: https://www.surveysystem.com/sscalc.htm#one. A 95% confidence interal with 10-15% margin of error resulted in sample sizes that caused performance issues.  The target sample size is roughly 148,000, which is a 95% confidence interval with +/- 25%.  The sampling is 3.48% (148,000 / 4250000) of the lines of text for each source.   
+
+``` {r SampleData, echo = TRUE}
+#news
+set.seed(123)
+SampleN<-rbinom(length(newstest)*148000/4250000, length(newstest), .5)
+SKDataUseN<-newstest[SampleN]
+length(SKDataUseN)
+write.csv(SKDataUseN, file = "C:/Users/Betsy/Documents/CapstoneOutput/NewsSample.csv", row.names = FALSE, col.names = FALSE)
+#blogs
+set.seed(123)
+SampleB<-rbinom(length(blogstest)*148000/4250000, length(blogstest), .5)
+SKDataUseB<-blogstest[SampleB]
+length(SKDataUseB)
+write.csv(SKDataUseB, file = "C:/Users/Betsy/Documents/CapstoneOutput/BlogSample.csv", row.names = FALSE, col.names = FALSE)
+#twitter
+set.seed(123)
+SampleT<-rbinom(length(twtest)*148000/4250000, length(twtest), .5)
+SKDataUseT<-twtest[SampleT]
+length(SKDataUseT)
+write.csv(SKDataUseT, file = "C:/Users/Betsy/Documents/CapstoneOutput/TwSample.csv", row.names = FALSE, col.names = FALSE)
+```
+
+Storing the sample in a single directory allows for the Corpus to be created using the directory source.  
+
+``` {r Copus, echo = TRUE}
+SKCorpus <- VCorpus(DirSource("C:/Users/Betsy/Documents/CapstoneOutput/"), readerControl = list(language = "en"))
+#bal # of docs...should be 3
+SKCorpus
+```
+
+##Cleaning the Data  
+
+It is important to note test cases were found for each step listed below. While not listed below, these test cases validated the function worked as intended (no errors). The test cases can be provided upon request.  
+
+###Step 1: Remove Numbers.  
+
+Numbers will not be a contender for the next predictive word on a mobile keyboard.  
+
+``` {r NoNum, echo = TRUE}
+CorpPreProc <- tm_map(SKCorpus, removeNumbers)
+```
+
+###Step 2: Word Processing.  
+
+The high level steps include: lowercase, convert contractions, remove punctuation, stopwords, profanity filtering, and stemming.  
+
+``` {r WordTrunk, echo = TRUE}
+#lowercase
+CorpPreProc <- tm_map(CorpPreProc,content_transformer(tolower))
+#Convert contractions
+NoContractionS<-content_transformer(function(x, pattern) gsub(pattern, " is", x))
+CorpPreProc <- tm_map(CorpPreProc,NoContractionS,"'s")
+NoContractionLL<-content_transformer(function(x, pattern) gsub(pattern, " will", x))
+CorpPreProc <- tm_map(CorpPreProc,NoContractionLL,"'ll")
+NoContractionVE<-content_transformer(function(x, pattern) gsub(pattern, " have", x))
+CorpPreProc <- tm_map(CorpPreProc,NoContractionVE,"'ve")
+NoContractionNT<-content_transformer(function(x, pattern) gsub(pattern, " not", x))
+CorpPreProc <- tm_map(CorpPreProc,NoContractionNT,"n't")
+NoContractionM<-content_transformer(function(x, pattern) gsub(pattern, " am", x))
+CorpPreProc <- tm_map(CorpPreProc,NoContractionM,"'m")
+NoContractionD<-content_transformer(function(x, pattern) gsub(pattern, " would", x))
+CorpPreProc <- tm_map(CorpPreProc,NoContractionD,"'d")
+#remove punctuation
+CorpPreProc <-tm_map(CorpPreProc, removePunctuation)
+```
+
+Note for mobile keyboard modeling purposes, there is value to include stop words as the next predictive word. From an exploratory perspective these words create noise.  Therefore the analysis has a trunk to include stop words for modeling, and a branch to exclude stop words for exploration.  
+
+``` {r Stopwords, echo=TRUE}
+#stopwords - branch only
+CorpPreProcSTOP <- tm_map(CorpPreProc, removeWords, stopwords("english"))
+```
+
+The Google list of bad words can be found here: https://www.freewebheaders.com/full-list-of-bad-words-banned-by-google/.  Words in this list have been removed from the Corpus.  
+
+``` {r BadWords, echo = TRUE}
+#profanity filtering
+GoogleBad<-readLines(con<-file("C:/Users/Betsy/Downloads/full-list-of-bad-words-text-file_2018_03_26_26/full-list-of-bad-words-text-file_2018_03_26.txt", encoding="UTF-8", open="rb"),skipNul=TRUE)
+close(con)
+GoogleBanned<-as.character(GoogleBad)
+#trunk - model
+CorpPreProc <- tm_map(CorpPreProc, removeWords, GoogleBanned)
+#branched version word cloud
+CorpPreProcSTOP <- tm_map(CorpPreProcSTOP, removeWords, GoogleBanned)
+```
+
+The last step in the word processing section is stemming.  
+
+``` {r Stemming, echo = TRUE}
+#trunk - model
+CorpPreProc <- tm_map(CorpPreProc,stemDocument)
+#branched version
+CorpPreProcSTOP <- tm_map(CorpPreProcSTOP,stemDocument)
+```
+
+###Step 3: Character Processing  
+
+Let's address special characters. These will not be contenders for the next predictive word for a mobile keyboard.  
+
+``` {r Char, echo = TRUE}
+removeSpecial <- content_transformer(function(x)
+        gsub("[Â®â¢Â¥Â£â¬#Ã¢â¬Ã°Å¸Å Ã­Â½$ÃÂ¢Ã¢â¬âÃ¢â¬]","", x))
+CorpPreProc2 <- tm_map(CorpPreProc, removeSpecial)
+#branched version - word cloud
+CorpPreProcSTOP <- tm_map(CorpPreProcSTOP, removeSpecial)
+
+#email <- "^[[:alnum:].-]+@[[:alnum:].-]+$"
+removeEmail <- content_transformer(function(x)
+        gsub("^[[:alnum:].-]+@[[:alnum:].-]+$","", x))
+CorpPreProc2 <- tm_map(CorpPreProc2, removeEmail)
+#branched version - word cloud
+CorpPreProcSTOP <- tm_map(CorpPreProcSTOP, removeEmail)
+
+#Remove non ASCII characters.
+removeNonASCII <- content_transformer(function(x)
+        gsub("[^\x20-\x7E]","", x))
+CorpPreProc2 <- tm_map(CorpPreProc2, removeNonASCII)
+#branched version - word cloud
+CorpPreProcSTOP <- tm_map(CorpPreProcSTOP, removeNonASCII)
+
+#Remove URLs.
+removeURLs <- content_transformer(function(x)
+        gsub("(f|ht)tp(s?):(\\s*?)//(.*)[.][a-z]+(/?)", "", x))
+CorpPreProc2 <- tm_map(CorpPreProc2, removeURLs)
+#branched version - word cloud
+CorpPreProcSTOP <- tm_map(CorpPreProcSTOP, removeURLs)
+```
+
+###Step 4: Remove Whitespace.  
+
+Extra white spaces are not needed.  
+
+```{r White, echo = TRUE}
+#trunk - model
+CorpPreProc2 <- tm_map(CorpPreProc2,stripWhitespace)
+#branch
+CorpPreProcSTOP <- tm_map(CorpPreProcSTOP,stripWhitespace)
+```
+
+###Step 5: Plain Text Format.  
+
+Plain text is need for the next steps in the modeling process.  
+
+``` {r Plain, echo=TRUE}
+#trunk - model
+CorpPreProc2 <- tm_map(CorpPreProc2, PlainTextDocument)
+#branch
+CorpPreProcSTOP <- tm_map(CorpPreProcSTOP, PlainTextDocument)
+```
+
+##Dataset Summary (prior to n-gram model)   
+
+Now that the data is cleaned, let's take a look and see if the results are reasonable before building the model. The following wordcloud, excluding the stop words, is reasonable.  
+
+``` {r wordcloud, echo = TRUE}
+wordcloud(CorpPreProcSTOP, max.words = 100, colors = brewer.pal(8, "Dark2"))
+```
+
+##DocTermMatrix for Bag of Words  
+
+Let's explore the matrix containing the bag of words. It's reasonable to expect no slang terms with highest frequency. Word associations (measured by correlation) are also reviewed.  
+
+
+``` {r DTMat, echo=TRUE}
+#trunk - modeling
+dtm<-DocumentTermMatrix(CorpPreProc2)
+dtm
+#branch
+dtmSTOP<-DocumentTermMatrix(CorpPreProcSTOP)
+dtmSTOP
+#remove low freq terms
+#This function call removes those terms which have at least a 80 percentage 
+#of sparse (i.e., terms occurring 0 times in a document) elements.
+#TRUNK
+dtmNoSparse<-removeSparseTerms(dtm, 0.2)
+dtmNoSparse
+#BRANCH
+dtmSTOPNoSparse<-removeSparseTerms(dtmSTOP, 0.2)
+dtmSTOPNoSparse
+#TRUNK
+dtmMatrix<-as.matrix(dtmNoSparse)
+dim(dtmMatrix)
+#BRANCH
+dtmMatrixSTOP<-as.matrix(dtmSTOPNoSparse)
+dim(dtmMatrixSTOP)
+freq <- sort(colSums(dtmMatrix), decreasing = TRUE) 
+head(freq,25)
+tail(freq,25)
+#BRANCH High Level review freq
+freqSTOP <- sort(colSums(dtmMatrixSTOP), decreasing = TRUE) 
+head(freqSTOP,25)
+tail(freqSTOP,25)
+```
+
+'Beer' is the selected test for word association.  While the results are interesting, they are also reasonable.  
+
+```{r Assoc, echo = TRUE}
+findAssocs(dtmNoSparse,"beer",corlimit = 0.99)
+```
+
+Below are plots of single word frequencies.  
+
+``` {r basicplot, echo = TRUE}
+#dataframe for plotting
+#trunk
+DFNoSparse <- data.frame(word = names(freq),freq = freq)
+p <- ggplot(subset(DFNoSparse, freq > 10000), aes(word, freq))
+p <- p + geom_bar(stat = "identity")
+p <- p + theme(axis.text.x = element_text(angle = 45, hjust = 1)) 
+p <- p + xlab("Word")
+p <- p + ylab("Frequency")
+p <- p + ggtitle("Words with more than 10,000 appearences - with stop words") 
+p
+#branch
+DFSTOPNoSparse <- data.frame(word = names(freqSTOP),freqSTOP = freqSTOP)
+p2 <- ggplot(subset(DFSTOPNoSparse, freqSTOP > 10000), aes(word, freqSTOP))
+p2 <- p2 + geom_bar(stat = "identity")
+p2 <- p2 + theme(axis.text.x = element_text(angle = 45, hjust = 1)) 
+p2 <- p2 + xlab("Word")
+p2 <- p2 + ylab("Frequency")
+p2 <- p2 + ggtitle("Words with more than 10,000 appearences - stop words removed") 
+p2
+```
+
+Next, let's review the frequencies of 2-grams and 3-grams in the dataset.  These are reasonable as well.  
+
+``` {r file,echo=TRUE}
+BiTokenizer <- function(x) unlist(lapply(ngrams(words(x), 2), paste, collapse = " "), use.names = FALSE)
+TriTokenizer <- function(x) unlist(lapply(ngrams(words(x), 3), paste, collapse = " "), use.names = FALSE)
+
+#Term Doc Matrix
+BItdm <- TermDocumentMatrix(CorpPreProc2,control = list(tokenize = BiTokenizer))
+TRItdm<-TermDocumentMatrix(CorpPreProc2,control = list(tokenize = TriTokenizer))
+
+#Freq, min 100
+BIfreq <- findFreqTerms(BItdm,lowfreq = 100)
+TRIfreq <- findFreqTerms(TRItdm,lowfreq = 100)
+
+#n-gram freq
+BIgramfreq <- rowSums(as.matrix(BItdm[BIfreq,]))
+#df col 1 = word, col2 = freq
+BIgramfreq <- data.frame(word=names(BIgramfreq),FQ=BIgramfreq)
+BIgramfreq<-arrange(BIgramfreq,desc(FQ))
+
+TRIgramfreq <- rowSums(as.matrix(TRItdm[TRIfreq,]))
+TRIgramfreq <- data.frame(word=names(TRIgramfreq),FQ=TRIgramfreq)
+TRIgramfreq<-arrange(TRIgramfreq,desc(FQ))
+
+
+#plot of most common n-grams
+#bi gram x=reorder(name,depth)
+
+ggplot(BIgramfreq[1:10,], aes(x=reorder(word,FQ), y=FQ, fill=FQ))+
+        geom_bar(stat="identity") +
+        theme(axis.title.y = element_blank()) +
+        coord_flip() +
+        labs(y="Frequency", title="Top 10 Most Common Bigrams")
+#trigram
+ggplot(TRIgramfreq[1:10,], aes(x=reorder(word,FQ), y=FQ, fill=FQ)) +
+        geom_bar(stat="identity") +
+        theme(axis.title.y = element_blank()) +
+        coord_flip() +
+        labs(y="Frequency", title="Top 10 Most Common Trigrams")
+```
+
+###Next Steps
+1. Find out why knit to html fails
+2. Create a prediction algorithm & test thoroughly.  Accuracy will be key.
+3. Create a shiny app
+
+
+
+
+
+
